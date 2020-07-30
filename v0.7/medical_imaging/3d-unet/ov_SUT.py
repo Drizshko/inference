@@ -56,13 +56,13 @@ class _3DUNET_OV_SUT():
             print("Processing sample id {:d} with shape = {:}".format(
                 query_samples[i].index, data.shape))
 
-            before_softmax = self.exec_net.infer(inputs={self.input_name: data[np.newaxis, ...]})[self.output_name]
-            after_softmax = softmax(before_softmax, axis=1).astype(np.float16)
+            before_softmax = self.exec_net.infer(inputs={self.input_name: data[np.newaxis, ...]})[self.output_name].squeeze(0)
+            after_softmax = softmax(before_softmax, axis=0)
+            output = np.argmax(after_softmax, axis=0).astype(np.float16)
 
-            response_array = array.array("B", after_softmax.tobytes())
+            response_array = array.array("B", output.tobytes())
             bi = response_array.buffer_info()
-            response = lg.QuerySampleResponse(query_samples[i].id, bi[0],
-                                              bi[1])
+            response = lg.QuerySampleResponse(query_samples[i].id, bi[0], bi[1])
             lg.QuerySamplesComplete([response])
 
     def flush_queries(self):

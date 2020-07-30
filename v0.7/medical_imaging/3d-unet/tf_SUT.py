@@ -56,10 +56,10 @@ class _3DUNET_TF_SUT():
 
             before_softmax = self.sess.run(
                 self.output, feed_dict={self.input: data[np.newaxis, ...]})[0]
-            softmax = tf.nn.softmax(before_softmax,
-                                    axis=0).numpy().astype(np.float16)
+            softmax = tf.nn.softmax(before_softmax, axis=0).numpy()
+            output = np.argmax(softmax, axis=0).astype(np.float16)
 
-            response_array = array.array("B", softmax.tobytes())
+            response_array = array.array("B", output.tobytes())
             bi = response_array.buffer_info()
             response = lg.QuerySampleResponse(query_samples[i].id, bi[0],
                                               bi[1])

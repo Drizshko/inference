@@ -20,12 +20,14 @@ import numpy as np
 import os
 import pickle
 import sys
+import SimpleITK as sitk
 
 sys.path.insert(0, os.path.join(os.getcwd(), "nnUnet"))
 
 from multiprocessing import Pool
 from nnunet.evaluation.region_based_evaluation import evaluate_regions, get_brats_regions
-from nnunet.inference.segmentation_export import save_segmentation_nifti_from_softmax
+
+import time
 
 dtype_map = {
     "int8": np.int8,
@@ -49,6 +51,23 @@ def get_args():
     args = parser.parse_args()
     return args
 
+def save_prediction(softmax_mean, output_filename, dct):
+    shape_original_before_cropping = dct.get('original_size_of_raw_data')
+    bbox = dct.get('crop_bbox')
+
+    seg_old_size = np.zeros(shape_original_before_cropping)
+    for c in range(3):
+        bbox[c][1] = np.min((bbox[c][0] + softmax_mean.shape[c], shape_original_before_cropping[c]))
+    seg_old_size[bbox[0][0]:bbox[0][1],
+    bbox[1][0]:bbox[1][1],
+    bbox[2][0]:bbox[2][1]] = softmax_mean
+
+    seg_resized_itk = sitk.GetImageFromArray(seg_old_size.astype(np.uint8))
+    seg_resized_itk.SetSpacing(dct['itk_spacing'])
+    seg_resized_itk.SetOrigin(dct['itk_origin'])
+    seg_resized_itk.SetDirection(dct['itk_direction'])
+    sitk.WriteImage(seg_resized_itk, output_filename)
+
 def save_predictions_MLPerf(predictions, output_folder, output_files, dictionaries, num_threads_nifti_save, all_in_gpu, force_separate_z=None, interp_order=3, interp_order_z=0):
     print("Saving predictions...")
     pool = Pool(num_threads_nifti_save)
@@ -58,19 +77,9 @@ def save_predictions_MLPerf(predictions, output_folder, output_files, dictionari
         output_filename = os.path.join(output_folder, output_filename + ".nii.gz")
         softmax_mean = predictions[i]
         dct = dictionaries[i]
-        bytes_per_voxel = 4
-        if all_in_gpu:
-            bytes_per_voxel = 2  # if all_in_gpu then the return value is half (float16)
-        if np.prod(softmax_mean.shape) > (2e9 / bytes_per_voxel * 0.85):  # * 0.85 just to be save
-            print(
-                "This output is too large for python process-process communication. Saving output temporarily to disk")
-            np.save(output_filename[:-7] + ".npy", softmax_mean)
-            softmax_mean = output_filename[:-7] + ".npy"
+        
+        results.append(pool.starmap_async(save_prediction, ((softmax_mean, output_filename, dct),)))
 
-        results.append(pool.starmap_async(save_segmentation_nifti_from_softmax,
-                                          ((softmax_mean, output_filename, dct, interp_order, None, None, None,
-                                            None, None, force_separate_z, interp_order_z),)
-                                          ))
     _ = [i.get() for i in results]
 
     pool.close()
@@ -93,9 +102,9 @@ def load_loadgen_log(log_file, result_dtype, dictionaries):
         # Remove the padded part
         pad_before = [(p - r) // 2 for p, r in zip(padded_shape, raw_shape)]
         pad_after = [-(p - r - b) for p, r, b in zip(padded_shape, raw_shape, pad_before)]
-        result_shape = (4,) + tuple(padded_shape)
+        result_shape = tuple(padded_shape)
         result = np.frombuffer(bytes.fromhex(prediction["data"]), result_dtype).reshape(result_shape).astype(np.float16)
-        results[qsl_idx] = result[:, pad_before[0]:pad_after[0], pad_before[1]:pad_after[1], pad_before[2]:pad_after[2]]
+        results[qsl_idx] = result[pad_before[0]:pad_after[0], pad_before[1]:pad_after[1], pad_before[2]:pad_after[2]]
 
     assert all([i is not None for i in results]), "Missing some results!"
 
@@ -113,6 +122,8 @@ def main():
     force_separate_z = None
     interp_order = 3
     interp_order_z = 0
+
+    start_time = time.perf_counter()
 
     # Load necessary metadata.
     print("Loading necessary metadata...")
@@ -150,7 +161,7 @@ def main():
                 print("Accuracy: mean = {:.5f}, whole tumor = {:.4f}, tumor core = {:.4f}, enhancing tumor = {:.4f}".format(mean, whole, core, enhancing))
                 break
 
-    print("Done!")
+    print("Done! Total time: {} sec.".format(time.perf_counter() - start_time))
 
 if __name__ == "__main__":
     main()
