@@ -40,11 +40,18 @@ class _3DUNET_OV_SUT():
         model_xml = model_path
         model_bin = os.path.splitext(model_xml)[0] + '.bin'
         
+        self.num_requests = 4
+        self.device = 'CPU'
+
         ie = IECore()
+        config = {}
+        config['CPU_THROUGHPUT_STREAMS'] = str(self.num_requests)
+
+        ie.set_config(config, self.device)
+
         net = ie.read_network(model=model_xml, weights=model_bin)
 
         self.input_name = next(iter(net.inputs))
-        self.num_requests = 4
 
         self.exec_net = ie.load_network(network=net, device_name='CPU', num_requests=self.num_requests)
 
@@ -73,17 +80,20 @@ class _3DUNET_OV_SUT():
             response = lg.QuerySampleResponse(query_samples[i].id, bi[0], bi[1])
             lg.QuerySamplesComplete([response])
 
+
     def issue_queries_async(self, query_samples):
-        def _process_output(index, id, output):
-            print('Processing output for sample id: {}'.format(index))
+        def _process_output(index, id, request):
+            output = request.output_blobs[_3DUNET_OV_SUT.output_name()].buffer.squeeze(0)
+
+            dtype = np.float32
+            dtype_size = np.dtype(dtype).itemsize
 
             output = softmax(output, axis=0)
+            output = np.argmax(output, axis=0).astype(dtype)
 
-            output = np.argmax(output, axis=0).astype(np.float16)
+            ptr = output.__array_interface__['data'][0]
+            response = lg.QuerySampleResponse(id, ptr, output.size * dtype_size)
 
-            response_array = array.array("B", output.tobytes())
-            bi = response_array.buffer_info()
-            response = lg.QuerySampleResponse(id, bi[0], bi[1])
             lg.QuerySamplesComplete([response])
 
         exec_net = self.exec_net
@@ -95,6 +105,7 @@ class _3DUNET_OV_SUT():
         idx = 0
 
         futures = {}
+        executor = concurrent.futures.ThreadPoolExecutor(len(exec_net.requests) * 2)
 
         while total_requests > idx:
             if (total_requests - idx) < len(exec_net.requests):
@@ -118,15 +129,14 @@ class _3DUNET_OV_SUT():
 
             exec_net.wait()
 
-            executor = concurrent.futures.ThreadPoolExecutor(streams_to_run)
-
             for infer_request_id in range(0, streams_to_run):
                 infer_request = exec_net.requests[infer_request_id]
                 output = infer_request.output_blobs[self.output_name()].buffer.squeeze(0)
 
                 dict = request_to_sample_id[infer_request_id]
+
                 args = (_process_output,
-                        dict['index'], dict['id'], output)
+                        dict['index'], dict['id'], infer_request)
                 futures[executor.submit(*args)] = infer_request_id
                 del request_to_sample_id[infer_request_id]
 

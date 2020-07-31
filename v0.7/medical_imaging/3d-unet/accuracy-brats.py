@@ -42,7 +42,7 @@ dtype_map = {
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--log_file", default="build/logs/mlperf_log_accuracy.json", help="Path to accuracy log json file")
-    parser.add_argument("--output_dtype", default="float16", choices=dtype_map.keys(), help="Output data type")
+    parser.add_argument("--output_dtype", default="float32", choices=dtype_map.keys(), help="Output data type")
     parser.add_argument("--preprocessed_data_dir", default="build/preprocessed_data", help="Path to the directory containing preprocessed data")
     parser.add_argument("--postprocessed_data_dir", default="build/postprocessed_data", help="Path to the directory containing postprocessed data")
     parser.add_argument("--label_data_dir", default="build/raw_data/nnUNet_raw_data/Task043_BraTS2019/labelsTr",
